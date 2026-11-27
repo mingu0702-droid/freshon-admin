@@ -5,6 +5,12 @@ import {FRESHON_NIGHT_DISPATCH,FRESHON_NIGHT_DISPATCH_LABEL} from './opsmapSyncP
 
 const origin='https://mis.freshon.co.kr';
 const orderUrl=origin+'/bo/sm/order/orderInfoList';
+const maxRows=60_000;
+const maxValueChars=256*1024;
+const maxResponseBytes=256*1024*1024;
+const framingAllowanceBytes=2*1024*1024;
+const averageRowAllowanceBytes=8*1024;
+const sizeError=()=>Object.assign(Error('ORDER_RESPONSE_LIMIT'),{code:'ORDER_RESPONSE_LIMIT'});
 const centers={
   osan:['011',['오산물류센터','오산센터','오산(직영) 센터']],
   yeongnam:['012',['영남센터']],
@@ -35,12 +41,13 @@ function projectOrders(date, centerKey) {
   }
   return {
     row(row) {
-      if (++rawCount>60_000) throw Object.assign(Error('ORDER_ROWS_LIMIT'),{code:'ORDER_RESPONSE_INVALID'});
+      if (++rawCount>maxRows) throw Object.assign(Error('ORDER_ROWS_LIMIT'),{code:'ORDER_RESPONSE_INVALID'});
       if (row&&['소계','합계','총계'].includes(row.stockDate)&&!row.estCd&&!row.dlvyEstCd) return;
       if (++count===1) total=Number(row?.totalCnt);
       if (!firstRejection) firstRejection=validate(row);
       if(count===1&&!firstRejection)firstLine=orderLineKey(row);
     },
+    rowsSeen:()=>rawCount,
     finish({data,statusFailed,okFailed}) {
       if (!data||statusFailed||okFailed) return 'RESPONSE_INVALID';
       if (!count) return 'SOURCE_EMPTY';
@@ -61,7 +68,7 @@ function orderEnvelope(acceptRow) {
   let state='start', key, token=null;
   const space=character=>character===' '||character==='\t'||character==='\r'||character==='\n';
   const invalid=()=>{throw SyntaxError('ORDER_RESPONSE_JSON');};
-  const begin=(delimiter,accept)=>{token={delimiter,accept,parts:[],depth:0,string:false,escaped:false};};
+  const begin=(delimiter,accept)=>{token={delimiter,accept,parts:[],chars:0,depth:0,string:false,escaped:false};};
   function write(text) {
     let offset=0;
     while (offset<text.length) {
@@ -79,7 +86,11 @@ function orderEnvelope(acceptRow) {
           else if(c==='}'||c===']') {if(--part.depth<0)invalid();}
           offset++;
         }
-        if(offset>start)part.parts.push(text.slice(start,offset));
+        if(offset>start) {
+          part.chars+=offset-start;
+          if(part.chars>maxValueChars)throw sizeError();
+          part.parts.push(text.slice(start,offset));
+        }
         if(offset===text.length) return;
         const delimiter=text[offset++];
         token=null;
@@ -129,39 +140,46 @@ function orderEnvelope(acceptRow) {
 }
 
 async function readOrderEvidence(response,date,centerKey,signal) {
-  // The verified Osan night-order export can exceed 48 MiB. The parser
-  // still reads fixed-size blocks and keeps the existing row limit.
-  const limit=(centerKey==='osan'?64:48)*1024*1024;
   const length=response.headers.get('content-length');
   const type=(response.headers.get('content-type')||'').split(';')[0].trim();
   const cancel=reader=>{try {void reader?.cancel()?.catch(()=>{});}catch {}};
   if (!/^application\/(?:json|[a-z0-9.+-]+\+json)$/i.test(type)||
-      length!==null&&(!/^\d+$/.test(length)||Number(length)>limit)) {
+      length!==null&&!/^\d+$/.test(length)) {
     cancel(response.body);throw Error('ORDER_RESPONSE_HEADERS');
+  }
+  if (Number(length)>maxResponseBytes) {
+    cancel(response.body);throw sizeError();
   }
   const reader=response.body?.getReader();
   if(!reader)throw Error('ORDER_RESPONSE_BODY');
   const decoder=new TextDecoder('utf-8',{fatal:true}), projector=projectOrders(date,centerKey);
   const envelope=orderEnvelope(projector.row);
   const block=new Uint8Array(65_536);
-  let bytes=0,filled=0;
+  let bytes=0,decodedBytes=0,filled=0;
+  function decodeBlock(length) {
+    envelope.write(decoder.decode(block.subarray(0,length),{stream:true}));
+    decodedBytes+=length;
+    // A wide export can grow with its verified source row count. A sparse
+    // or padded response still stops early instead of spending the full budget.
+    if(decodedBytes>framingAllowanceBytes+projector.rowsSeen()*averageRowAllowanceBytes)throw sizeError();
+  }
   try {
     while(!signal.aborted) {
       const chunk=await waitForPhotoSignal(reader.read(),signal);
       if(chunk.done){
-        if(filled)envelope.write(decoder.decode(block.subarray(0,filled),{stream:true}));
+        if(filled)decodeBlock(filled);
         envelope.write(decoder.decode());
         return projector.finish(envelope.finish());
       }
       bytes+=chunk.value.byteLength;
-      if(bytes>limit)throw Error('ORDER_RESPONSE_LIMIT');
+      if(bytes>maxResponseBytes)throw sizeError();
       // Fixed-size decoding both caps large chunks and coalesces tiny ones.
       for(let offset=0;offset<chunk.value.length;) {
         const take=Math.min(block.length-filled,chunk.value.length-offset);
         block.set(chunk.value.subarray(offset,offset+take),filled);
         filled+=take;offset+=take;
         if(filled===block.length) {
-          envelope.write(decoder.decode(block,{stream:true}));
+          decodeBlock(filled);
           filled=0;
         }
       }
@@ -229,8 +247,9 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
         shipGbn:'1',deliveGbn:'',baecha:FRESHON_NIGHT_DISPATCH,orderGbn:'',sortType:'3',sort:',ASC',page:'0',size:'1000',
         isPaging:'false',isCount:'true'});
       try {
+        const scopeSignal=AbortSignal.any([budget,AbortSignal.timeout(centerKey==='osan'?60_000:30_000)]);
         const request=(form=body)=>fetchImpl(orderUrl,{method:'POST',redirect:'manual',
-          signal:AbortSignal.any([budget,AbortSignal.timeout(30_000)]),body:form.toString(),
+          signal:scopeSignal,body:form.toString(),
           headers:{Cookie:cookie,Accept:'application/json','Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',
             'X-Requested-With':'XMLHttpRequest',Origin:origin,Referer:origin+'/bo/main'}});
         let response=await request();
@@ -245,7 +264,7 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
           report(centerKey,response.status===403?'SOURCE_FORBIDDEN':'HTTP_REJECTED');
           continue;
         }
-        const result=await readOrderEvidence(response,date,centerKey,budget);
+        const result=await readOrderEvidence(response,date,centerKey,scopeSignal);
         if (typeof result==='string') {report(centerKey,result);continue;}
         if(result.verify){
           const probe=new URLSearchParams(body);
@@ -258,7 +277,8 @@ export function createStageRecentOrdersReader({env=process.env, fetchImpl=fetch,
         input.push(result.evidence);
         report(centerKey,'VERIFIED');
       } catch (error) {report(centerKey,budget.aborted?'BUDGET_EXHAUSTED':
-        error?.code==='ORDER_RESPONSE_INVALID'?'RESPONSE_INVALID':'READ_FAILED');}
+        error?.code==='ORDER_RESPONSE_INVALID'?'RESPONSE_INVALID':
+        error?.code==='ORDER_RESPONSE_LIMIT'?'RESPONSE_LIMIT':'READ_FAILED');}
     }
     return input;
   };

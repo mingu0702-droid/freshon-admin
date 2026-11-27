@@ -377,19 +377,25 @@ test('streamed orders validate fragmented UTF-8, row/scope counts, and the compl
   assert.equal(cancelCount,0);
 });
 
-test('large Osan order exports stream within a bounded byte limit',async()=>{
+test('large Osan order exports exceed the old cap and still enforce an absolute transport budget',async()=>{
   const date='2026-11-26', onlyOsan=new Set(['yeongnam','honam']), diagnostics=[];
   const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
     OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
-  const count=16_474;
+  const count=22_171;
   const row={stockDate:date,logCdName:'오산물류센터',logCd:'011',dcOutDate:'확정',
-    baechaName:'야간배송',estCd:'S1',dlvyEstCd:'S1',orderNo:'O1',orderQty:2,totalCnt:count,
+    baechaName:'야간배송',estCd:'S1',dlvyEstCd:'S1',orderNo:'O1',orderQty:2,totalCnt:0,
     extra:'a'.repeat(3_100)};
-  let emitted=0, tooLarge=false;
-  const read=createStageRecentOrdersReader({env,onDiagnostic:value=>diagnostics.push(value),fetchImpl:async()=>{
+  let emitted=0, proofReads=0, tooLarge=false;
+  const read=createStageRecentOrdersReader({env,onDiagnostic:value=>diagnostics.push(value),fetchImpl:async(_url,opt)=>{
+    const form=new URLSearchParams(opt.body);
+    if(form.get('isPaging')==='true'){
+      assert.equal(form.get('size'),'1');
+      proofReads++;
+      return Response.json({status:200,data:[{...row,seq:1,totalCnt:count}]});
+    }
     let seq=0;
     const headers={'content-type':'application/json'};
-    if(tooLarge)headers['content-length']=String(64*1024*1024+1);
+    if(tooLarge)headers['content-length']=String(256*1024*1024+1);
     return new Response(new ReadableStream({pull(controller){
       if(seq>count){controller.close();return;}
       const text=seq===0?'{"data":[':JSON.stringify({...row,seq})+(seq===count?']}':',');
@@ -400,11 +406,27 @@ test('large Osan order exports stream within a bounded byte limit',async()=>{
     }}),{headers});
   }});
   assert.deepEqual(await read(date,onlyOsan),[makeNightOrderDay(date,'osan',['S1'])]);
-  assert.ok(emitted>48*1024*1024);
-  assert.ok(emitted<64*1024*1024);
+  assert.ok(emitted>72_251_582);
+  assert.ok(emitted<80*1024*1024);
+  assert.equal(proofReads,1);
   tooLarge=true;
   assert.deepEqual(await read(date,onlyOsan),[]);
-  assert.equal(diagnostics.filter(d=>d.centerKey==='osan').at(-1).state,'READ_FAILED');
+  assert.equal(diagnostics.filter(d=>d.centerKey==='osan').at(-1).state,'RESPONSE_LIMIT');
+});
+
+test('streamed orders stop oversized individual values and padded responses before accepting evidence',async()=>{
+  const date='2026-11-27', diagnostics=[];
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
+  let text='{"padding":"'+ 'a'.repeat(300*1024)+'","data":[]}';
+  const read=createStageRecentOrdersReader({env,onDiagnostic:entry=>diagnostics.push(entry),
+    fetchImpl:async()=>new Response(text,{headers:{'content-type':'application/json'}})});
+  const onlyOsan=new Set(['yeongnam','honam']);
+  assert.deepEqual(await read(date,onlyOsan),[]);
+  assert.equal(diagnostics.findLast(d=>d.centerKey==='osan').state,'RESPONSE_LIMIT');
+  text=' '.repeat(3*1024*1024)+'{"data":[]}';
+  assert.deepEqual(await read(date,onlyOsan),[]);
+  assert.equal(diagnostics.findLast(d=>d.centerKey==='osan').state,'RESPONSE_LIMIT');
 });
 
 test('a newly sourced day is saved and verified before advancing the operating ledger',async()=>{
@@ -544,7 +566,11 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
   const old=makeDay(date,'freshon_orders','partial',['S20'],'yeongnam');
   const delivered=makeDay(date,'delivery_admin','partial',['S30'],'yeongnam');
   const extraOrder=makeDay(date,'freshon_orders','partial',['S40'],'yeongnam');
-  let current={ledger:mergeRecentOperations(ledger(),latest,[old,wms]),sha:'before'};
+  const previouslyFailed={date,centerKey:'yeongnam',source:'freshon_orders',state:'RETRY_LATER',
+    attemptedOn:'2026-11-23',attemptCount:2,nextEligibleOn:'2026-11-25'};
+  let current={ledger:normalizeRecentOperations({
+    ...mergeRecentOperations(ledger(),latest,[old,wms]),recovery:[previouslyFailed]
+  }),sha:'before'};
   const archive=[old], calls=[], claims=new Set();
   let receiptDate='2026-11-24', writes=0, conflict=false, elapsed=0;
   const options=()=>({
@@ -582,7 +608,7 @@ test('one bounded historical scope resumes on the next signed day, preserving ar
   receiptDate='2026-11-25';
   conflict=true;
   assert.equal((await syncStageRecentOperations(options())).state,'BUSY');
-  assert.equal(current.ledger.recovery.length,1);
+  assert.equal(current.ledger.recovery.length,2);
   conflict=false;
   assert.equal((await syncStageRecentOperations(options())).state,'SOURCE_UNAVAILABLE');
   assert.equal(calls.filter(([kind])=>kind==='historical').length,2);
@@ -607,7 +633,11 @@ test('explicit multi-scope budget shares one claim, persists cooldown, and stops
   const target='2026-11-22';
   let receiptDate='2026-11-24',clock=0,claims=0;
   const scopes=[];
-  let current={ledger:mergeRecentOperations(ledger(),'2026-11-23',[]),sha:'first'};
+  let current={ledger:normalizeRecentOperations({
+    ...mergeRecentOperations(ledger(),'2026-11-23',[]),
+    recovery:[{date:target,centerKey:'yeongnam',source:'freshon_orders',state:'RETRY_LATER',
+      attemptedOn:'2026-11-23',attemptCount:1,nextEligibleOn:'2026-11-24'}]
+  }),sha:'first'};
   const options=()=>({store:{
     async read(){return current;},async readDay(){return null;},
     async claimRecovery(day){assert.equal(day,receiptDate);claims++;return true;},
@@ -627,8 +657,8 @@ test('explicit multi-scope budget shares one claim, persists cooldown, and stops
   assert.equal(result.state,'RECOVERY_CHECKPOINTED');
   assert.equal(claims,1);
   assert.deepEqual(result.recoveryBatch.map(r=>[r.source,r.state,r.attemptCount,r.nextEligibleOn]),[
-    ['delivery_admin','RETRY_LATER',1,'2026-11-25'],
-    ['freshon_orders','SCOPE_BLOCKED',1,undefined]
+    ['freshon_orders','SCOPE_BLOCKED',2,undefined],
+    ['delivery_admin','RETRY_LATER',1,'2026-11-25']
   ]);
   await syncStageRecentOperations(options());
   assert.equal(claims,1);
@@ -648,6 +678,69 @@ test('explicit multi-scope budget shares one claim, persists cooldown, and stops
   assert.equal(current.ledger.recovery.find(r=>r.centerKey==='yeongnam'&&r.source==='delivery_admin').attemptCount,3);
   assert.equal(current.ledger.recovery.find(r=>r.centerKey==='yeongnam'&&r.source==='delivery_admin').nextEligibleOn,undefined);
   assert.equal(scopes.filter(row=>row[2]==='yeongnam'&&row[3]==='freshon_orders').length,1);
+});
+
+test('daily order failures queue only that date and center and clear on recovery',async()=>{
+  const date='2026-11-27';
+  const dispatch=makeDay(date,'wms_dispatch','partial',['S1'],'osan');
+  const delivered=makeDay(date,'delivery_admin','partial',['S2'],'osan');
+  const yeongnam=makeNightOrderDay(date,'yeongnam',['S3']);
+  const recovered=makeNightOrderDay(date,'osan',['S1','S4']);
+  let receiptDate='2026-11-28',current={ledger:ledger(),sha:'original'};
+  const claims=new Set(),scopes=[];
+  const options=()=>({
+    receipt:{runId:'e'.repeat(64),date:receiptDate},now:()=>Date.parse(receiptDate+'T00:10Z'),
+    store:{read:async()=>current,readDay:async()=>null,
+      async claimRecovery(day){
+        if(claims.has(day))return false;
+        claims.add(day);
+        return true;
+      },
+      async write(next,sha){
+        assert.equal(sha,current.sha);
+        current={ledger:next,sha:'verified'};
+      }},
+    recoverySources:['freshon_orders'],
+    readLatestDay:async (latest,_deliveries,orders,report)=>{
+      if(latest!==date)return [];
+      assert.equal(orders.has('osan'),false);
+      report({centerKey:'osan',state:'RESPONSE_LIMIT'});
+      report({centerKey:'honam',state:'SOURCE_EMPTY'});
+      report({centerKey:'yeongnam',state:'VERIFIED'});
+      return [delivered,yeongnam];
+    },
+    readLatestDispatch:async selected=>selected===date?{
+      date,center:'osan',source:'WMS_CONFIRMED_DISPATCH_EXPORT',
+      vehicles:[{vehicle:'101',details:[{customerCode:'S1'}]}]
+    }:null,
+    readHistoricalScope:async scope=>{
+      scopes.push(scope);
+      return {rows:[recovered],state:'RETRY_LATER'};
+    }
+  });
+  assert.equal((await syncStageRecentOperations(options())).orderRecoveryQueued,1);
+  assert.deepEqual(scopes,[]);
+  assert.deepEqual(current.ledger.recovery,[{
+    date,centerKey:'osan',source:'freshon_orders',state:'RETRY_LATER',
+    attemptedOn:'2026-11-28',attemptCount:1,nextEligibleOn:'2026-11-29'
+  }]);
+  const repeated=options();
+  repeated.readLatestDay=async(latest,_deliveries,orders)=>{
+    assert.equal(latest,date);
+    assert(orders.has('osan')&&orders.has('yeongnam'));
+    return [];
+  };
+  await syncStageRecentOperations(repeated);
+  receiptDate='2026-11-29';
+  assert.equal((await syncStageRecentOperations(options())).state,'PUBLISHED');
+  assert.deepEqual(scopes,[{date,centerKey:'osan',source:'freshon_orders'}]);
+  assert.equal(current.ledger.recovery[0].state,'VERIFIED');
+  for(const unchanged of [dispatch,delivered,yeongnam])
+    assert.deepEqual(current.ledger.days.find(day=>day.source===unchanged.source&&day.centerKey===unchanged.centerKey),unchanged);
+  assert.deepEqual(current.ledger.days.find(day=>day.source==='freshon_orders'&&day.centerKey==='osan'),recovered);
+  receiptDate='2026-11-30';
+  await syncStageRecentOperations(options());
+  assert.equal(scopes.length,1);
 });
 
 test('the Stage historical sender claim can be created once per current Seoul day',async()=>{

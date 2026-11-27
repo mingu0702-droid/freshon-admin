@@ -87,7 +87,7 @@ export function stageFixedMasterScope(active, additionalRegistry, nationalRegist
     codes:[...active.registry.keys()]});
 }
 
-export function stageFixedMasterStorage({env=process.env, fetchImpl=fetch, write=false}={}) {
+export function stageFixedMasterStorage({env=process.env, fetchImpl=fetch, write=false, retryReads=false, onReadRetry}={}) {
   if (!stageFixedMasterSyncEnabled(env) || env.OPSMAP_STAGE_SYNC_REMOTE_APPROVED !== '1' ||
       write && (!opsmapArchiveWriteApproved(env) || env.OPSMAP_STAGE_SYNC_PUBLISH_APPROVED !== '1')) throw fail('FIXED_STORE_STAGE_APPROVAL');
   const token = write ? env.OPSMAP_STAGE_SYNC_WRITE_TOKEN ||
@@ -111,9 +111,16 @@ export function stageFixedMasterStorage({env=process.env, fetchImpl=fetch, write
     return fetchImpl(input,{...options,redirect:'error'});
   }
   const api=createPrivateGithubJsonStore({env:{GITHUB_CACHE_REPO:repo,GITHUB_CACHE_BRANCH:branch,
-    GITHUB_CACHE_DIR:'opsmap-stage',GITHUB_TOKEN:token},fetchImpl:scopedFetch});
-  return {read:api.read,...(write?{write:api.write}:{}),
-    async loadBaseline(){return (await api.read(baselineFile)).value;}};
+    GITHUB_CACHE_DIR:'opsmap-stage',GITHUB_TOKEN:token},fetchImpl:scopedFetch,diagnoseReads:retryReads});
+  const read=retryReads ? async name=>{
+    try{return await api.read(name);}
+    catch(error){
+      if(error?.code!=='FIXED_STORE_NETWORK'&&error?.fixedDiagnostic?.retryable!==true)throw error;
+      onReadRetry?.({code:error.code,reason:error.fixedDiagnostic?.reason??'REQUEST_INTERRUPTED'});
+      return api.read(name);
+    }
+  } : api.read;
+  return {read,...(write?{write:api.write}:{}),async loadBaseline(){return (await read(baselineFile)).value;}};
 }
 
 async function readHead(store) {
@@ -200,7 +207,18 @@ function verifyProjection(result, scope, baseline, observedAt, skipRefresh) {
     ...(excel?{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:baseline.version,observedMatchedCount,
       retainedUnconfirmedCount:rows.length-observedMatchedCount}:{})};
   const sourceObservedAt=excel ? meta.centers.map(item=>item.observedAt).sort().at(-1) : observedAt;
-  return {envelope:fixedEnvelope(rows,sourceObservedAt),coverage,sourceObservedAt,retainedCodes};
+  try {return {envelope:fixedEnvelope(rows,sourceObservedAt),coverage,sourceObservedAt,retainedCodes};}
+  catch(error){
+    const detail=error.fixedDiagnostic;
+    if(detail){
+      const location=result.locations?.get(rows[detail.rowIndex]?.customerCode);
+      const fieldNames={customerCode:'estCd',baseVehicle:'mainCarSeqNm',baseVehicleGroup:'logCd',baseVehicleEmptyVerified:'mainCarSeqNm'};
+      error.fixedDiagnostic={...detail,...location,...(location&&{
+        field:fieldNames[detail.field]??(detail.field.startsWith('weekdays.')?'carSeq'+detail.field.slice(9)+'Nm':detail.field)
+      })};
+    }
+    throw error;
+  }
 }
 
 // Callers authenticate the signed schedule or explicitly approved Stage recovery.
@@ -225,12 +243,14 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
     if (current.head.attempt?.runId!==runId || current.head.attempt.state!=='RUNNING') throw fail('FIXED_STORE_DAILY_SUPERSEDED');
     await store.write(headFile,{...current.head,...fields},current.sha);
   }
+  let phase='BASELINE_READ';
   try {
     const saved=head.current ? await verifiedObject(store,head.current) : null;
     const fallback=loadBaseline ? await Promise.resolve().then(loadBaseline).catch(error=>{if(!saved)throw error;return null;}) : null;
     const approved=fallback ? validateFixedEnvelope(fallback,{materialize:false}).envelope : null;
     const baseline=approved && (!saved || approved.checkedAt>saved.checkedAt) ? approved : saved;
     let result;
+    phase='SOURCE_READ';
     try {
       const refreshCodes=skipRefresh.size?new Set([...codes].filter(code=>!skipRefresh.has(code))):codes;
       result=await readMaster(refreshCodes,baseline);
@@ -238,6 +258,7 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
       if (error.name==='TimeoutError') throw fail('FIXED_MASTER_DAILY_TIMEOUT');
       throw error;
     }
+    phase='SOURCE_PROJECTION';
     const {envelope,coverage,sourceObservedAt,retainedCodes}=verifyProjection(result,codes,baseline,nowISO(now()),skipRefresh);
     if (baseline && Date.parse(envelope.checkedAt)<=Date.parse(baseline.checkedAt)) throw fail('FIXED_STORE_DAILY_SUPERSEDED');
     const rowsHash=digest(envelope.rows);
@@ -245,11 +266,14 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
     const current=unchanged ? {...head.current,ledgerSha256:scope.ledgerSha256} : {version:envelope.version,
       checkedAt:envelope.checkedAt,rowsHash,ledgerSha256:scope.ledgerSha256,count:envelope.count};
     if (!unchanged) {
+      phase='CANDIDATE_READ';
       const file=objectFile(current), present=await store.read(file);
+      phase='CANDIDATE_WRITE';
       if (!present.value) {
         try {await store.write(file,envelope,null);}
         catch (e) {if (e.code!=='FIXED_STORE_CONFLICT') throw e;}
       }
+      phase='CANDIDATE_READBACK';
       await verifiedObject(store,current);
     }
     const at=nowISO(now());
@@ -265,8 +289,10 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
     const retainedByDate={...head.retainedByDate};
     if(retainedCodes.length)retainedByDate[observedDay]={runId,codes:retainedCodes};
     else delete retainedByDate[observedDay];
+    phase='HEAD_PUBLISH';
     await finish({current,previous:unchanged?head.previous:head.current,attempt:{...attempt,state:'VERIFIED'},
       observations,lastSuccess,...(head.retainedByDate || retainedCodes.length?{retainedByDate}:{})});
+    phase='HEAD_READBACK';
     const committed=(await readHead(store)).head;
     if (committed.observations?.[observedDay]?.runId!==runId ||
         committed.observations[observedDay].ref.version!==current.version) throw fail('FIXED_STORE_DAILY_READBACK');
@@ -274,7 +300,7 @@ export async function syncStageFixedMaster({store, receipt, scope: input, readMa
   } catch (error) {
     const code=failureCode(error);
     await finish({attempt:{...attempt,state:'FAILED'},lastFailure:{runId,at:nowISO(now()),code}}).catch(()=>{});
-    throw fail(code);
+    throw Object.assign(fail(code),{fixedDiagnostic:{...error.fixedDiagnostic,phase}});
   }
 }
 

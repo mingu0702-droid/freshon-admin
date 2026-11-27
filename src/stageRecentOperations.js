@@ -25,7 +25,7 @@ const maxRetryDates = 7;
 const historicalSources = ['delivery_admin','freshon_orders'];
 const historicalStates = ['VERIFIED','NO_ACCEPTED_EVIDENCE','READ_FAILED','RETRY_LATER','SCOPE_BLOCKED'];
 const recoveryBudgetMs = 90_000;
-const historicalReadMs = 30_000;
+const historicalReadMs = 30_000, historicalOrderReadMs = 60_000;
 const maxHistoricalScopes = recoveryBudgetMs/historicalReadMs;
 const maxHistoricalAttempts = 3;
 const dayAfter = (date,days) => new Date(Date.parse(date)+days*86400000).toISOString().slice(0,10);
@@ -170,16 +170,26 @@ export function mergeRecentOperations(previous, endDate, days,{preserveDispatchE
 }
 
 function nextHistoricalScope({base, additions, day, receiptDate, sources,journal,unreadableDates}) {
-  const complete=new Set([...base.days,...additions].filter(row=>row.coverage==='complete').map(dayKey));
+  const observed=new Set([...base.days,...additions].filter(row=>row.coverage==='complete' ||
+    row.source==='freshon_orders'&&row.rows.some(item=>item.nightOrder)).map(dayKey));
   const dates=datesFor(day,90).slice(0,-1).reverse();
   const priorities=['yeongnam','honam','osan'];
   const eligible=scope=>{
     const attempt=journal.get(dayKey(scope));
-    if(unreadableDates.has(scope.date)||complete.has(dayKey(scope)))return false;
+    if(unreadableDates.has(scope.date)||observed.has(dayKey(scope)))return false;
     if(!attempt)return true;
     return retryable.has(attempt.state)&&(attempt.attemptCount??1)<maxHistoricalAttempts&&
       (attempt.nextEligibleOn??dayAfter(attempt.attemptedOn,1))<=receiptDate;
   };
+  // Order exports are expensive. Retry only an explicitly failed date and
+  // center, even when an older date has no order observations.
+  if(sources.includes('freshon_orders')) {
+    for(const date of dates) for(const centerKey of priorities) {
+      const scope={date,centerKey,source:'freshon_orders'};
+      if(journal.has(dayKey(scope))&&eligible(scope))return scope;
+    }
+  }
+  sources=sources.filter(source=>source!=='freshon_orders');
   if (dates.includes('2026-11-22')) {
     for (const centerKey of priorities) for (const source of sources) {
       const scope={date:'2026-11-22',centerKey,source};
@@ -418,6 +428,10 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     }
   }
 
+  const historicalRecoveryEnabled=readHistoricalScope && store.claimRecovery && !repairDate && !retryDates.length &&
+    Number.isInteger(recoveryScopeLimit)&&recoveryScopeLimit>=1&&recoveryScopeLimit<=maxHistoricalScopes;
+  const trackOrders=historicalRecoveryEnabled&&recoverySources.includes('freshon_orders');
+  const journal=new Map((base.recovery??[]).map(entry=>[dayKey(entry),entry])), latestOrderAttempts=new Map();
   const dates=new Set([day,...(repairDate?[repairDate]:[]),...retryDates.filter(date=>date>=windowStart)]);
   const days=[];
   let endDate=base.endDate;
@@ -443,12 +457,23 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       const observed=[...previous,...input];
       const deliveryCenters=new Set(observed.filter(row=>row.source==='delivery_admin').map(row=>row.centerKey));
       const orderCenters=new Set(observed.filter(row=>row.source==='freshon_orders').map(row=>row.centerKey));
+      if(trackOrders&&date===day)for(const attempt of journal.values()) {
+        if(attempt.date===day&&attempt.source==='freshon_orders'&&attempt.attemptedOn===kstDate)orderCenters.add(attempt.centerKey);
+      }
       if (deliveryCenters.size<recentOperationsCenters.length || orderCenters.size<recentOperationsCenters.length) {
-        const additions=await readLatestDay(date,deliveryCenters,orderCenters);
+        const additions=await readLatestDay(date,deliveryCenters,orderCenters,({centerKey,state})=>{
+          if(!trackOrders||date!==day||!recentOperationsCenters.includes(centerKey)||orderCenters.has(centerKey)||
+            ['VERIFIED','ALREADY_OBSERVED','SOURCE_EMPTY'].includes(state))return;
+          const outcome=historicalRecoveryOutcome(state);
+          const scope={date,centerKey,source:'freshon_orders'};
+          latestOrderAttempts.set(dayKey(scope),{...scope,state:outcome,attemptedOn:kstDate,attemptCount:1,
+            ...(retryable.has(outcome)?{nextEligibleOn:dayAfter(kstDate,1)}:{})});
+        });
         if (!Array.isArray(additions) || additions.some(row=>!row || row.date!==date ||
           row.source==='delivery_admin'&&deliveryCenters.has(row.centerKey) ||
           row.source==='freshon_orders'&&orderCenters.has(row.centerKey) ||
           row.source!=='delivery_admin'&&row.source!=='freshon_orders')) throw rejected();
+        for(const addition of additions)latestOrderAttempts.delete(dayKey(addition));
         input.push(...additions);
       }
       if (input.length && savedInput==null && (previous.length===0 || latestHasWms) && store.writeDay) {
@@ -469,10 +494,8 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
     days.push(...input);
     if (date>endDate) endDate=date;
   }
-  const attempts=[],journal=new Map((base.recovery??[]).map(entry=>[dayKey(entry),entry]));
-  if (readHistoricalScope && store.claimRecovery && !repairDate && !retryDates.length &&
-      Number.isInteger(recoveryScopeLimit)&&recoveryScopeLimit>=1&&recoveryScopeLimit<=maxHistoricalScopes &&
-      ![...journal.values()].some(row=>row.attemptedOn===kstDate)) {
+  const attempts=[];
+  if (historicalRecoveryEnabled && ![...journal.values()].some(row=>row.attemptedOn===kstDate)) {
     const sources=historicalSources.filter(source=>recoverySources.includes(source));
     const archives=new Map(),unreadableDates=new Set();
     let claimed=false;
@@ -488,16 +511,19 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       if (archive!=null && (!Array.isArray(archive)||archive.some(row=>row?.date!==scope.date))) throw rejected();
       const sealed=archive?.find(row=>dayKey(row)===dayKey(scope));
       let result=[], state='NO_ACCEPTED_EVIDENCE';
-      if (!claimed && sealed?.coverage!=='complete' && now()-startedAt<recoveryBudgetMs) {
+      const verifiedArchive=sealed?.coverage==='complete'||
+        scope.source==='freshon_orders'&&sealed?.rows.some(item=>item.nightOrder);
+      if (!claimed && !verifiedArchive && now()-startedAt<recoveryBudgetMs) {
         try {claimed=await store.claimRecovery(kstDate,receipt.runId);}
         catch { /* Latest evidence can still be published. */ }
       }
       const availableMs=recoveryBudgetMs-(now()-startedAt);
       const providerAdmitted=claimed&&availableMs>0;
-      if (sealed?.coverage==='complete') result=[sealed];
+      if (verifiedArchive) result=[sealed];
       else if (providerAdmitted) {
         try {
-          const read=await readHistoricalScope(scope,AbortSignal.timeout(Math.min(historicalReadMs,availableMs)));
+          const limit=scope.source==='freshon_orders'?historicalOrderReadMs:historicalReadMs;
+          const read=await readHistoricalScope(scope,AbortSignal.timeout(Math.min(limit,availableMs)));
           result=Array.isArray(read)?read:read?.rows;
           if (!result?.length && historicalStates.includes(read?.state)) state=read.state;
         }
@@ -522,20 +548,23 @@ export async function syncStageRecentOperations({store,receipt,readSeed,readSour
       attempts.push(attempt);
     }
   }
-  if (!days.length && !attempts.length) return {
+  for(const [key,attempt] of latestOrderAttempts)journal.set(key,attempt);
+  const recoveryChanged=attempts.length>0||latestOrderAttempts.size>0;
+  if (!days.length && !recoveryChanged) return {
     state:nightPublished?'PUBLISHED':nightScopes.length?'VERIFIED_NOOP':'SOURCE_UNAVAILABLE',endDate:base.endDate
   };
   let next=mergeRecentOperations(base,endDate,days);
-  if (attempts.length) next=normalizeRecentOperations({...next,recovery:[...journal.values()].filter(entry=>entry.date>=next.startDate)});
+  if (recoveryChanged) next=normalizeRecentOperations({...next,recovery:[...journal.values()].filter(entry=>entry.date>=next.startDate)});
   if (current.ledger && sameLedger(next,base))
     return {state:nightPublished?'PUBLISHED':'VERIFIED_NOOP',endDate:base.endDate};
   let version;
   try {version=await store.write(next,current.sha);}
   catch(error) {if(error.code==='FIXED_STORE_CONFLICT')return {state:'BUSY',endDate:base.endDate};throw error;}
   await confirmRecentOperationsWrite(store,version,next);
-  const evidenceChanged=attempts.length&&(endDate!==base.endDate||!sameScopes(next.days,base.days));
-  return {state:!nightPublished&&attempts.length&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
-    ...(attempts.length?{recovery:attempts.at(-1),recoveryBatch:attempts}:{})};
+  const evidenceChanged=endDate!==base.endDate||!sameScopes(next.days,base.days);
+  return {state:!nightPublished&&recoveryChanged&&!evidenceChanged&&current.ledger?'RECOVERY_CHECKPOINTED':'PUBLISHED',endDate,
+    ...(attempts.length?{recovery:attempts.at(-1),recoveryBatch:attempts}:{}),
+    ...(latestOrderAttempts.size?{orderRecoveryQueued:[...latestOrderAttempts.values()].filter(item=>retryable.has(item.state)).length}:{})};
 }
 
 function projectArchivedOsanDispatch(archive,date){

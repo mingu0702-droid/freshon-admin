@@ -15,7 +15,12 @@ const centers=['011','012','013'];
 const weekdays=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm');
 const fields=['mainCarSeqNm',...weekdays];
 const MiB=1024*1024;
-const fail=code=>Object.assign(Error(code),{code});
+const transientHttp=new Set([408,429,500,502,503,504]);
+const transientStream=e=>e?.name==='TimeoutError' || e?.name==='AbortError' ||
+  ['ECONNRESET','ETIMEDOUT','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT']
+    .includes(e?.cause?.code??e?.code);
+const worksheetColumns=Object.fromEntries([...'ACDEFGHIJ'].map((column,index)=>[column,['estCd',...fields][index]]));
+const fail=(code,fixedDiagnostic)=>Object.assign(Error(code),{code,...(fixedDiagnostic?{fixedDiagnostic}:{})});
 const day=now=>new Date(now+9*3600_000).toISOString().slice(0,10);
 
 export async function readFixedMasterExcel(workbook,{codes,declaredRows,sha256,signal,
@@ -41,10 +46,14 @@ export async function readFixedMasterExcel(workbook,{codes,declaredRows,sha256,s
     yield Buffer.from(JSON.stringify({codes:[...codes],declaredRows,sha256})+'\n');
     yield* workbook;
   })(),{objectMode:false});
-  const [status,piped]=await Promise.all([closed,pipeline(input,child.stdin,{signal}).then(()=>true,()=>false)]);
-  if(status!==0||!piped){
-    const code=stderr.match(/^FIXED_MASTER_EXCEL_[A-Z_]+$/m)?.[0]||'FIXED_MASTER_EXCEL_PARSE';
-    throw fail(code);
+  const [status,pipeError]=await Promise.all([closed,pipeline(input,child.stdin,{signal}).then(()=>null,error=>error)]);
+  if(status!==0||pipeError){
+    const detail=stderr.match(/^(FIXED_MASTER_EXCEL_[A-Z_]+) ([1-9][0-9]{0,6}) ([ACDEFGHIJ]) ([A-Z_]+)$/m);
+    if(detail)throw fail(detail[1],{row:Number(detail[2]),field:worksheetColumns[detail[3]],reason:detail[4]});
+    const code=stderr.match(/^FIXED_MASTER_EXCEL_[A-Z_]+$/m)?.[0];
+    if(code)throw fail(code);
+    if(transientStream(pipeError))throw fail('FIXED_MASTER_EXCEL_TRANSIENT',{reason:'BODY_INTERRUPTED'});
+    throw fail('FIXED_MASTER_EXCEL_PARSE',{reason:'WORKBOOK_PARSE_FAILED'});
   }
   try {return JSON.parse(Buffer.concat(chunks,length).toString('utf8'));}
   catch {throw fail('FIXED_MASTER_EXCEL_PARSE');}
@@ -54,17 +63,24 @@ export function fixedMasterExcelRaw([estCd,...values],logCd) {
   return {estCd,logCd,...Object.fromEntries(fields.map((field,i)=>[field,values[i]]))};
 }
 
-export function projectFixedMasterExcel(raw) {
+export function projectFixedMasterExcel(raw,locations) {
   const rows=projectFixedVehicles(raw);
-  if (rows.some(row=>row.baseVehicleState==='CONFLICT' ||
-      row.baseVehicleState==='UNASSIGNED' && row.baseVehicleEmptyVerified!==true ||
-      Object.values(row.weekdays).some(value=>!value))) throw fail('FIXED_MASTER_EXCEL_FIELD');
+  for(const row of rows){
+    let field='mainCarSeqNm', reason;
+    if(row.baseVehicleState==='CONFLICT')reason='CONFLICT';
+    else if(row.baseVehicleState==='UNASSIGNED' && row.baseVehicleEmptyVerified!==true)reason='UNVERIFIED_EMPTY';
+    else{
+      const invalidDay=Object.keys(row.weekdays).find(day=>!row.weekdays[day]);
+      if(invalidDay){field='carSeq'+invalidDay+'Nm';reason='INVALID_FORMAT';}
+    }
+    if(reason)throw fail('FIXED_MASTER_EXCEL_FIELD',{...locations?.get(row.customerCode),field,reason});
+  }
   return rows;
 }
 
 export function createStageFixedMasterExcelSource({env=process.env,fetchImpl=fetch,
   login=()=>loginFreshonOverHttp({origin,userId:env.FRESHON_ID,password:env.FRESHON_PASSWORD}),
-  parseExcel=readFixedMasterExcel,now=Date.now,onCenter}={}) {
+  parseExcel=readFixedMasterExcel,now=Date.now,onCenter,onRetry}={}) {
   if(!stageFixedMasterSyncEnabled(env)||env.FRESHON_BASE_URL&&new URL(env.FRESHON_BASE_URL).origin!==origin) {
     throw fail('FIXED_MASTER_STAGE_SOURCE_SCOPE');
   }
@@ -90,10 +106,16 @@ export function createStageFixedMasterExcelSource({env=process.env,fetchImpl=fet
         ...(excel?{sortYn:'',excelExcute:'true'}:{})
       });
       const signal=AbortSignal.any([timeout,AbortSignal.timeout(excel?5*60_000:30_000)]);
-      const response=await fetchImpl(endpoint,{method:'POST',redirect:'manual',body:form,signal,headers:{
-        Cookie:cookie,Origin:origin,Referer:origin+'/bo/main','X-Requested-With':'XMLHttpRequest',
-        Accept:excel?'*/*':'application/json','Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'
-      }});
+      let response;
+      try{
+        response=await fetchImpl(endpoint,{method:'POST',redirect:'manual',body:form,signal,headers:{
+          Cookie:cookie,Origin:origin,Referer:origin+'/bo/main','X-Requested-With':'XMLHttpRequest',
+          Accept:excel?'*/*':'application/json','Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'
+        }});
+      }catch(error){
+        if(error instanceof TypeError||transientStream(error))throw fail('FIXED_MASTER_EXCEL_TRANSIENT',{reason:'REQUEST_INTERRUPTED'});
+        throw error;
+      }
       const html=response.headers.get('content-type')?.includes('text/html');
       const redirect=response.status>=300&&response.status<400;
       if(response.status===200&&!html&&response.body)return {response,signal};
@@ -103,33 +125,42 @@ export function createStageFixedMasterExcelSource({env=process.env,fetchImpl=fet
         throw fail('FIXED_MASTER_AUTH_REQUIRED');
       }
       if(response.status===403) throw fail('FIXED_MASTER_FORBIDDEN');
+      if(transientHttp.has(response.status))throw fail('FIXED_MASTER_EXCEL_TRANSIENT',{reason:'TRANSIENT_HTTP',status:response.status});
       throw fail('FIXED_MASTER_EXCEL_HTTP');
     }
     async function readCount(center){
       const {response}=await request(center,false);
       let bytes=0;
       const chunks=[];
-      for await(const chunk of response.body){
-        bytes+=chunk.length;
-        if(bytes>MiB) throw fail('FIXED_MASTER_EXCEL_COUNT');
-        chunks.push(chunk);
+      try{
+        for await(const chunk of response.body){
+          bytes+=chunk.length;
+          if(bytes>MiB) throw fail('FIXED_MASTER_EXCEL_COUNT',{field:'totalCnt',reason:'COUNT_RESPONSE_SIZE'});
+          chunks.push(chunk);
+        }
+      }catch(error){
+        if(transientStream(error))throw fail('FIXED_MASTER_EXCEL_TRANSIENT',{field:'totalCnt',reason:'BODY_INTERRUPTED'});
+        throw error;
       }
       let json;
       try {json=JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'));}
-      catch {throw fail('FIXED_MASTER_EXCEL_COUNT');}
+      catch {throw fail('FIXED_MASTER_EXCEL_COUNT',{field:'totalCnt',reason:'COUNT_RESPONSE_JSON'});}
       const row=json?.data?.[0],count=Number(row?.totalCnt);
-      if(Number(json?.status)!==200||!Array.isArray(json.data)||json.data.length!==1||row?.logCd!==center||
-          !normalizeFixedMasterCustomerKey(row.estCd)||!Number.isSafeInteger(count)||count<1||count>120_000||
-          fields.some(field=>!Object.hasOwn(row,field))) throw fail('FIXED_MASTER_EXCEL_COUNT');
+      if(Number(json?.status)!==200||!Array.isArray(json.data)||json.data.length!==1||
+          !Number.isSafeInteger(count)||count<1||count>120_000)
+        throw fail('FIXED_MASTER_EXCEL_COUNT',{field:'totalCnt',reason:'COUNT_RESPONSE_FORMAT'});
+      if(row.logCd!==center)throw fail('FIXED_MASTER_EXCEL_COUNT',{field:'logCd',reason:'CENTER_MISMATCH'});
+      if(!normalizeFixedMasterCustomerKey(row.estCd))throw fail('FIXED_MASTER_EXCEL_COUNT',{field:'estCd',reason:'INVALID_FORMAT'});
+      const missing=fields.find(field=>!Object.hasOwn(row,field));
+      if(missing)throw fail('FIXED_MASTER_EXCEL_COUNT',{field:missing,reason:'MISSING_FIELD'});
       return {count,first:projectFixedVehicles([row])[0]};
     }
-    const seen=new Set(), raw=[], evidence=[];
-    for(const center of centers){
+    async function readCenter(center){
       const before=await readCount(center);
       const {response,signal}=await request(center,true);
       if(Number(response.headers.get('content-length'))>64*MiB){
         await response.body.cancel().catch(()=>{});
-        throw fail('FIXED_MASTER_EXCEL_DOWNLOAD_LIMIT');
+        throw fail('FIXED_MASTER_EXCEL_DOWNLOAD_LIMIT',{reason:'DOWNLOAD_SIZE'});
       }
       const observedAt=new Date(now()).toISOString();
       const {sha256,codes:keys,selected,first}=await parseExcel(Readable.fromWeb(response.body),{
@@ -137,21 +168,41 @@ export function createStageFixedMasterExcelSource({env=process.env,fetchImpl=fet
       });
       const after=await readCount(center);
       const firstRow=projectFixedVehicles([fixedMasterExcelRaw(first,center)])[0];
-      if(before.count!==after.count || JSON.stringify(firstRow)!==JSON.stringify(before.first) ||
-          JSON.stringify(firstRow)!==JSON.stringify(after.first)) throw fail('FIXED_MASTER_EXCEL_CENTER_DRIFT');
-      for(const key of keys){
-        if(seen.has(key)) throw fail('FIXED_MASTER_EXCEL_CUSTOMER_KEY');
+      if(before.count!==after.count)throw fail('FIXED_MASTER_EXCEL_CENTER_DRIFT',{field:'totalCnt',reason:'COUNT_CHANGED'});
+      if(JSON.stringify(firstRow)!==JSON.stringify(before.first)||JSON.stringify(firstRow)!==JSON.stringify(after.first)){
+        throw fail('FIXED_MASTER_EXCEL_CENTER_DRIFT',{row:2,reason:'FIRST_ROW_CHANGED'});
+      }
+      if(keys.length!==before.count)throw fail('FIXED_MASTER_EXCEL_ROW_COUNT',{field:'totalCnt',reason:'DECLARED_COUNT_MISMATCH'});
+      return {sha256,keys,selected,observedAt};
+    }
+    async function readCenterWithRetry(center){
+      for(let attempt=1;;attempt++){
+        try{return await readCenter(center);}
+        catch(error){
+          const fixedDiagnostic={...error.fixedDiagnostic,center};
+          const recoverable=error.code==='FIXED_MASTER_EXCEL_TRANSIENT'||error.code==='FIXED_MASTER_EXCEL_CENTER_DRIFT'||
+            error.code==='FIXED_MASTER_EXCEL_ROW_COUNT'&&fixedDiagnostic.reason==='DECLARED_COUNT_MISMATCH';
+          if(attempt!==1||timeout.aborted||!recoverable)throw Object.assign(error,{fixedDiagnostic});
+          onRetry?.({code:error.code,...fixedDiagnostic});
+        }
+      }
+    }
+    const seen=new Set(), raw=[], evidence=[], locations=new Map();
+    for(const center of centers){
+      const {sha256,keys,selected,observedAt}=await readCenterWithRetry(center);
+      for(const [index,key] of keys.entries()){
+        if(seen.has(key))throw fail('FIXED_MASTER_EXCEL_CUSTOMER_KEY',{center,row:index+2,field:'estCd',reason:'DUPLICATE'});
+        if(codes.has(key))locations.set(key,{center,row:index+2});
         seen.add(key);
       }
-      if(keys.length!==before.count)throw fail('FIXED_MASTER_EXCEL_ROW_COUNT');
-      raw.push(...selected.map(row=>fixedMasterExcelRaw(row,center)));
-      const item={center,sourceRows:keys.length,declaredRows:before.count,duplicateCustomerRows:0,
+      for(const row of selected)raw.push(fixedMasterExcelRaw(row,center));
+      const item={center,sourceRows:keys.length,declaredRows:keys.length,duplicateCustomerRows:0,
         sha256,observedAt};
       evidence.push(item);
       onCenter?.(item);
     }
-    const data=projectFixedMasterExcel(raw);
-    return {data,meta:{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:baseline.version,
+    const data=projectFixedMasterExcel(raw,locations);
+    return {data,locations,meta:{source:FIXED_MASTER_EXCEL_SOURCE,baselineVersion:baseline.version,
       sourceRows:seen.size,uniqueCustomers:seen.size,projectedCustomers:data.length,centers:evidence}};
   };
 }

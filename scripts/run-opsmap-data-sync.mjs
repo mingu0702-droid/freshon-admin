@@ -275,18 +275,24 @@ async function runScheduled(job,settingsFile){
         if (!expected || ![expected.yeongnam,expected.honam].every(count=>Number.isSafeInteger(count)&&count>0) ||
             snapshot.rows.filter(row=>row.verifiedLocation).length!==expected.yeongnam+expected.honam)
           throw Error('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
-        const recovered=await readApprovedOsanRegistryRecovery({env,readRegistry:()=>{
-          const store=createStageNationalRegistryStorage({env});
-          return createStageNationalRegistryReader({store})?.read();
-        }});
-        const membership=scopedNationalRegistryMembership(job?.registryScope,snapshot.rows,recovered);
+        const membershipFor=async readRegistry=>{
+          const recovered=await readApprovedOsanRegistryRecovery({env,readRegistry});
+          return scopedNationalRegistryMembership(job?.registryScope,snapshot.rows,recovered);
+        };
         const source=verifiedChanges?{
-          async prepareSource(previous){
+          async prepareSource(previous,ref){
+            const membership=await membershipFor(async()=>({ref,rows:previous}));
             const orderScope=await readNightOrderScope();
             const selection=verifiedNationalRegistryMembership(membership,previous,{
               orderCustomersByCenter:orderScope.byCenter});
             selection.skipRefresh=await refreshExclusions(orderScope,[...selection.membership.keys()]);
-            return {...selection,readCenter:createStageNationalRegistrationSource({env,...selection})};
+            const readCenter=createStageNationalRegistrationSource({env,...selection});
+            return {...selection,async readCenter(center){
+              memory('REGISTRY_'+center.toUpperCase()+'_START');
+              const result=await readCenter(center);
+              memory('REGISTRY_'+center.toUpperCase()+'_END');
+              return result;
+            }};
           },
           async confirmCenterMoves(codes){
             if(env.OPSMAP_STAGE_FIXED_MASTER_SOURCE!=='excel')return new Map();
@@ -299,7 +305,10 @@ async function runScheduled(job,settingsFile){
                 row.baseVehicleEmptyVerified===true).map(row=>[row.customerCode,row.baseVehicleGroup]));
             }catch{return new Map();}
           }
-        }:{readCenter:createStageNationalRegistrationSource({env,membership})};
+        }:{readCenter:createStageNationalRegistrationSource({env,membership:await membershipFor(()=>{
+          const store=createStageNationalRegistryStorage({env});
+          return createStageNationalRegistryReader({store})?.read();
+        })})};
         const value=await syncStageNationalRegistry({store:createStageNationalRegistryStorage({env,write:true}),receipt,
           ...source,readOfficial:async()=>snapshot.rows});
         console.log(JSON.stringify({component,runId:receipt.runId,state:value.state,count:value.count,
@@ -338,10 +347,10 @@ async function runScheduled(job,settingsFile){
         const deliveryDiagnostics=value=>console.info(JSON.stringify({
           component:'opsmap-recent-delivery-source',runId:receipt.runId,...value
         }));
-        const readLatestDay=readDelivery||readOrders?async(date,deliveryCenters,orderCenters)=>{
+        const readLatestDay=readDelivery||readOrders?async(date,deliveryCenters,orderCenters,onScopeDiagnostic)=>{
           const deliveries=readDelivery?await readDelivery(date,deliveryCenters,deliveryDiagnostics).catch(()=>[]):[];
           memory('AFTER_DELIVERY');
-          const orders=readOrders?await readOrders(date,orderCenters).catch(()=>[]):[];
+          const orders=readOrders?await readOrders(date,orderCenters,{onScopeDiagnostic}).catch(()=>[]):[];
           memory('AFTER_ORDERS');
           return [...deliveries,...orders];
         }:null;

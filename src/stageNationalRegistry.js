@@ -8,6 +8,7 @@ import {createPrivateGithubJsonStore} from './fixedVehicleStore.js';
 import {opsmapArchiveSite,opsmapArchiveWriteApproved} from './stageScope.js';
 import {FRESHON_NIGHT_DISPATCH,FRESHON_NIGHT_DISPATCH_LABEL,SYNC_CENTERS} from './opsmapSyncPolicy.js';
 import {addressRegionParts} from '../public/opsmap/vehicle-picker-regions.js';
+import {nationalRegistryEnvelope} from './nationalRegistryJsonStream.js';
 
 const repository = 'mingu0702-droid/freshon-cache';
 const branch = 'stage/opsmap-snapshots';
@@ -123,9 +124,10 @@ function rowOf(value, withPoint=false, partial=false) {
     ...(withPoint&&verifiedLocation?{verifiedLocation:{addressHash,lat:verifiedLocation.lat,lng:verifiedLocation.lng,kind:verifiedLocation.kind}}:{})};
 }
 
+const byCustomerCode=(a,b)=>a.customerCode.localeCompare(b.customerCode,'en');
 function normalizeRows(input, withPoint=false, partial=false) {
   if (!Array.isArray(input) || input.length>limit) throw failure('NATIONAL_REGISTRY_ROWS_INVALID');
-  const rows = input.map(row=>rowOf(row,withPoint,partial)).sort((a,b)=>a.customerCode.localeCompare(b.customerCode,'en'));
+  const rows = input.map(row=>rowOf(row,withPoint,partial)).sort(byCustomerCode);
   if (new Set(rows.map(row=>row.customerCode)).size!==rows.length) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
   return rows;
 }
@@ -185,7 +187,10 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
   if(verifiedChanges&&(!(membership instanceof Map)||!(excludedCustomers instanceof Set)||
       !(orderCustomersByCenter instanceof Map)||!(skipRefresh instanceof Set)))
     throw failure('NATIONAL_REGISTRY_SCOPE_UNAVAILABLE');
-  const seen=verifiedChanges?new Set():null, selected=verifiedChanges?new Set():null;
+  const seen=verifiedChanges?new Map():null;
+  const orderEvidence=verifiedChanges?SYNC_CENTERS.map(center=>orderCustomersByCenter.get(center)):[];
+  const fields=new Set(['estCd','estName',contract.centerField,contract.activeField,contract.addressField,
+    ...(contract.updatedAtField?[contract.updatedAtField]:[]),...(verifiedChanges?['baecha','baechaName']:[])]);
   let cookie=String(env.FRESHON_COOKIE||''), loginAttempted=false;
   const budget=AbortSignal.timeout(membership?NATIONAL_REGISTRY_WORKER_LIMIT-3*60_000:10*60_000);
   async function ensureSession(force=false) {
@@ -230,20 +235,45 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
         }
         throw failure(loginPage?'NATIONAL_REGISTRY_AUTH_REQUIRED':response.status===403?'NATIONAL_REGISTRY_FORBIDDEN':'NATIONAL_REGISTRY_SOURCE_HTTP');
       }
-      if (!response.body || Number(response.headers.get('content-length'))>maxClearBytes) throw failure('NATIONAL_REGISTRY_SOURCE_SIZE');
-      const chunks=[];
-      let bytes=0;
-      for await (const chunk of response.body) {
-        bytes+=chunk.length;
-        if (bytes>maxClearBytes) throw failure('NATIONAL_REGISTRY_SOURCE_SIZE');
-        chunks.push(chunk);
+      if (!response.body || Number(response.headers.get('content-length'))>maxClearBytes) {
+        await response.body?.cancel().catch(()=>{});
+        throw failure('NATIONAL_REGISTRY_SOURCE_SIZE');
       }
-      let result;
-      try {result=JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'));} catch {throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');}
-      const rows=contract.rowsKey===null?result:readField(result,contract.rowsKey);
-      const declared=readField(contract.totalLocation==='BODY'?result:rows?.[0],contract.totalField);
+      const rows=[], decoder=new TextDecoder('utf-8',{ignoreBOM:true});
+      const slab=new Uint8Array(64*1024);
+      let bytes=0,filled=0,firstRowTotal;
+      const envelope=nationalRegistryEnvelope(contract.rowsKey,contract.totalField,(row,index)=>{
+        if(contract.mode==='PAGED'&&index>=1000)throw failure('NATIONAL_REGISTRY_CENTER_INCOMPLETE');
+        if(index===0 && contract.totalLocation==='FIRST_ROW')firstRowTotal=readField(row,contract.totalField);
+        const projected=Object.create(null);
+        for(const key of fields)if(row&&Object.hasOwn(row,key))projected[key]=row[key];
+        rows.push(projected);
+      });
+      let bodyTotal;
+      try {
+        for await (const chunk of response.body) {
+          bytes+=chunk.length;
+          if (bytes>maxClearBytes) throw failure('NATIONAL_REGISTRY_SOURCE_SIZE');
+          for(let offset=0;offset<chunk.length;){
+            const take=Math.min(slab.length-filled,chunk.length-offset);
+            slab.set(chunk.subarray(offset,offset+take),filled);
+            filled+=take;offset+=take;
+            if(filled===slab.length){
+              envelope.write(decoder.decode(slab,{stream:true}));
+              filled=0;
+            }
+          }
+        }
+        if(filled)envelope.write(decoder.decode(slab.subarray(0,filled),{stream:true}));
+        envelope.write(decoder.decode());
+        bodyTotal=envelope.finish();
+      } catch(error) {
+        if(error instanceof SyntaxError)throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
+        throw error;
+      }
+      const declared=contract.totalLocation==='BODY'?bodyTotal:firstRowTotal;
       const total=typeof declared==='number'||typeof declared==='string'&&/^\d+$/.test(declared)?Number(declared):null;
-      if (!Array.isArray(rows) || !Number.isSafeInteger(total) || total<0 || total>(membership?scanLimit:limit))
+      if (!Number.isSafeInteger(total) || total<0 || total>(membership?scanLimit:limit))
         throw failure('NATIONAL_REGISTRY_SOURCE_CONTRACT');
       return {rows,total};
     }
@@ -253,11 +283,10 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
     if (!Object.hasOwn(centerCodes,center)) throw failure('NATIONAL_REGISTRY_SOURCE_SCOPE');
     const sourceCenter=contract.centerField==='logCdName'?centerNames[center]:centerCodes[center];
     const rows=[];
-    const activeCustomers=verifiedChanges?new Set():null;
     let total=0;
     for (const status of (membership?['Y']:['Y','N'])) {
       let expected=null, collected=0;
-      const pageHashes=new Set(), captured=new Set();
+      const pageHashes=new Set(), captured=membership&&!verifiedChanges?new Set():null;
       for (let page=0;page<Math.ceil((membership?scanLimit:limit)/1000);page++) {
         const response=await readPage(center,status,page);
         expected??=response.total;
@@ -286,12 +315,15 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
                 readField(row,'baechaName')===FRESHON_NIGHT_DISPATCH_LABEL;
               const eligible=night&&!excludedCustomers.has(code)&&!skipRefresh.has(code)&&
                 (approved||orderCustomersByCenter.get(center)?.has(code));
-              if(selected.has(code)||(approved||eligible)&&seen.has(code))
+              const prior=seen.get(code);
+              if(prior===true||(approved||eligible)&&prior!==undefined)
                 throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
-              seen.add(code);
-              if(approved||eligible)selected.add(code);
+              if(approved||eligible)seen.set(code,true);
+              // An unapproved code can affect a later duplicate check only if
+              // it can qualify via confirmed orders in one of these centers.
+              else if(prior===undefined&&!excludedCustomers.has(code)&&!skipRefresh.has(code)&&
+                  orderEvidence.some(customers=>customers?.has(code)))seen.set(code,false);
               if(!eligible)continue;
-              activeCustomers.add(code);
             }else{
               if (approved?.center!==center) continue;
               if (captured.has(code)) throw failure('NATIONAL_REGISTRY_DUPLICATE_CUSTOMER');
@@ -313,7 +345,7 @@ export function createStageNationalRegistrationSource({env=process.env,fetchImpl
       total+=collected;
     }
     return {center,rows,total:membership?rows.length:total,complete:true,
-      ...(activeCustomers?{activeCustomers:[...activeCustomers]}:{})};
+      ...(verifiedChanges?{activeCustomers:rows.map(row=>row.customerCode)}:{})};
   };
 }
 
@@ -349,7 +381,8 @@ function officialPointAt(reference,row) {
 
 export function mergeStageNationalRegistry(previous, incoming, official=[], review={}) {
   const current=new Map(normalizeRows(previous,true).map(row=>[row.customerCode,row]));
-  const points=new Map(official.filter(row=>row.verifiedLocation).map(row=>[row.customerCode,row]));
+  const points=new Map();
+  for(const row of official)if(row.verifiedLocation)points.set(row.customerCode,row);
   for (const observed of normalizeRows(incoming,false,true)) {
     const existing=current.get(observed.customerCode);
     if (existing?.sourceUpdatedAt && observed.sourceUpdatedAt &&
@@ -387,12 +420,15 @@ export function mergeStageNationalRegistry(previous, incoming, official=[], revi
       const point=(retainPoint&&existing.verifiedLocation)||officialPointAt(reference,row);
       if(point)row.verifiedLocation=point;
     }
-    const next=rowOf(row,true);
-    if(existing&&['customerName','basicAddress','centerGroup','lifecycle'].every(key=>existing[key]===next[key])&&
-        JSON.stringify(existing.verifiedLocation)===JSON.stringify(next.verifiedLocation))continue;
-    current.set(row.customerCode,next);
+    const priorPoint=existing?.verifiedLocation, nextPoint=row.verifiedLocation;
+    const samePoint=priorPoint===nextPoint||priorPoint&&nextPoint&&
+      priorPoint.addressHash===nextPoint.addressHash&&priorPoint.lat===nextPoint.lat&&
+      priorPoint.lng===nextPoint.lng&&priorPoint.kind===nextPoint.kind;
+    if(existing&&samePoint&&['customerName','basicAddress','centerGroup','lifecycle'].every(key=>existing[key]===row[key]))continue;
+    current.set(row.customerCode,rowOf(row,true));
   }
-  return normalizeRows([...current.values()],true);
+  if(current.size>limit)throw failure('NATIONAL_REGISTRY_ROWS_INVALID');
+  return [...current.values()].sort(byCustomerCode);
 }
 
 export function assertStageNationalRegistryDelta(before,after) {
@@ -532,7 +568,7 @@ export async function syncStageNationalRegistry({store,receipt,readCenter,readOf
   try {
     const official=await readOfficial?.() || [];
     const previous=head.current ? await decode(store,head.current) : official;
-    const source=prepareSource?await prepareSource(previous):{readCenter};
+    const source=prepareSource?await prepareSource(previous,head.current):{readCenter};
     const observed=await collectStageNationalRegistry(source.readCenter);
     let accepted=observed.rows, withheld=new Set();
     const review={};

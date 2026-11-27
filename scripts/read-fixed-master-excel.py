@@ -18,9 +18,20 @@ COLUMNS = tuple("ACDEFGHIJ")
 CELL_ADDRESS = re.compile(r"([A-Z]+)([0-9]+)\Z")
 
 
-def cell_text(cell, shared):
-    if cell is None or cell.find(NS + "f") is not None:
-        raise ValueError("FIXED_MASTER_EXCEL_FIELD")
+class SheetError(ValueError):
+    def __init__(self, code, row, column, reason):
+        super().__init__(code)
+        self.location = (row, column, reason)
+
+
+def cell_text(cell, shared, row, column):
+    def invalid(reason):
+        raise SheetError("FIXED_MASTER_EXCEL_FIELD", row, column, reason)
+
+    if cell is None:
+        invalid("MISSING_CELL")
+    if cell.find(NS + "f") is not None:
+        invalid("FORMULA")
     kind, value = cell.get("t", "n"), cell.find(NS + "v")
     if kind == "inlineStr":
         inline = cell.find(NS + "is")
@@ -32,8 +43,11 @@ def cell_text(cell, shared):
         if kind == "n" and re.fullmatch(r"[0-9]+", value.text or ""):
             return value.text
         if kind == "s" and re.fullmatch(r"[0-9]+", value.text or ""):
-            return shared[int(value.text)]
-    raise ValueError("FIXED_MASTER_EXCEL_FIELD")
+            index = int(value.text)
+            if index >= len(shared):
+                invalid("SHARED_STRING_INDEX")
+            return shared[index]
+    invalid("INVALID_CELL_VALUE")
 
 
 def xml_part(archive, name, limit):
@@ -58,7 +72,7 @@ def read_sheet(archive, expected, eligible):
     if "xl/sharedStrings.xml" in archive.namelist():
         strings = xml_part(archive, "xl/sharedStrings.xml", 8 * 1024**2)
         shared = ["".join(t.text or "" for t in item.iter(NS + "t")) for item in strings]
-    codes, selected, first = set(), [], None
+    codes, ordered, selected, first = set(), [], [], None
     data = None
     number = 0
     with archive.open("xl/worksheets/sheet1.xml") as stream:
@@ -68,36 +82,40 @@ def read_sheet(archive, expected, eligible):
             if event != "end" or node.tag != NS + "row" or data is None:
                 continue
             number += 1
-            if node.get("r") != str(number) or number > expected + 1:
-                raise ValueError("FIXED_MASTER_EXCEL_ROW_COUNT")
+            if node.get("r") != str(number):
+                raise SheetError("FIXED_MASTER_EXCEL_ROW_COUNT", number, "A", "ROW_SEQUENCE")
+            if number > expected + 1:
+                raise SheetError("FIXED_MASTER_EXCEL_ROW_COUNT", number, "A", "DECLARED_COUNT_MISMATCH")
             cells = {}
             for cell in node:
                 address = CELL_ADDRESS.fullmatch(cell.get("r") or "")
                 if address and address[1] in COLUMNS:
                     column = address[1]
                     if column in cells or address[2] != str(number):
-                        raise ValueError("FIXED_MASTER_EXCEL_LAYOUT")
+                        raise SheetError("FIXED_MASTER_EXCEL_LAYOUT", number, column, "CELL_LAYOUT")
                     cells[column] = cell
             if number == 1:
-                if [cell_text(cells.get(c), shared) for c in COLUMNS] != [
-                    "고객", "주 호차정보", *"월화수목금토일"
-                ]:
-                    raise ValueError("FIXED_MASTER_EXCEL_LAYOUT")
+                for column, expected_header in zip(COLUMNS, ["고객", "주 호차정보", *"월화수목금토일"]):
+                    if cell_text(cells.get(column), shared, number, column) != expected_header:
+                        raise SheetError("FIXED_MASTER_EXCEL_LAYOUT", number, column, "HEADER_MISMATCH")
             else:
-                code = cell_text(cells.get("A"), shared).strip().upper()
-                if len(code) > 64 or not CUSTOMER_CODE.fullmatch(code) or code in codes:
-                    raise ValueError("FIXED_MASTER_EXCEL_CUSTOMER_KEY")
+                code = cell_text(cells.get("A"), shared, number, "A").strip().upper()
+                if len(code) > 64 or not CUSTOMER_CODE.fullmatch(code):
+                    raise SheetError("FIXED_MASTER_EXCEL_CUSTOMER_KEY", number, "A", "INVALID_FORMAT")
+                if code in codes:
+                    raise SheetError("FIXED_MASTER_EXCEL_CUSTOMER_KEY", number, "A", "DUPLICATE")
                 codes.add(code)
+                ordered.append(code)
                 if first is None or code in eligible:
-                    row = [code, *(cell_text(cells.get(c), shared) for c in COLUMNS[1:])]
+                    row = [code, *(cell_text(cells.get(c), shared, number, c) for c in COLUMNS[1:])]
                     if first is None:
                         first = row
                     if code in eligible:
                         selected.append(row)
             data.remove(node)
     if len(codes) != expected:
-        raise ValueError("FIXED_MASTER_EXCEL_ROW_COUNT")
-    return dict(codes=list(codes), selected=selected, first=first)
+        raise SheetError("FIXED_MASTER_EXCEL_ROW_COUNT", max(number, 1), "A", "DECLARED_COUNT_MISMATCH")
+    return dict(codes=ordered, selected=selected, first=first)
 
 
 def read_export(config, source):
@@ -132,6 +150,10 @@ if __name__ == "__main__":
     try:
         result = read_export(json.loads(sys.stdin.buffer.readline(1024**2)), sys.stdin.buffer)
         print(json.dumps(result, separators=(",", ":")))
+    except SheetError as failure:
+        row, column, reason = failure.location
+        print(f"{failure} {row} {column} {reason}", file=sys.stderr)
+        sys.exit(1)
     except MemoryError:
         print("FIXED_MASTER_EXCEL_MEMORY", file=sys.stderr)
         sys.exit(1)

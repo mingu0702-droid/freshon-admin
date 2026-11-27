@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import {createHash,createHmac} from 'node:crypto';
 import {EventEmitter,once} from 'node:events';
-import {PassThrough} from 'node:stream';
+import {PassThrough,Readable} from 'node:stream';
 import test from 'node:test';
 import express from 'express';
+import XLSX from 'xlsx';
 import {FIXED_MASTER_EXCEL_SOURCE,createStageDailyFixedMasterReader,createStageFixedMasterSource,stageFixedMasterScope,stageFixedMasterStorage,syncStageFixedMaster}
   from '../src/stageFixedMasterSync.js';
 import {fixedEnvelope} from '../src/fixedVehicleStore.js';
@@ -14,7 +15,7 @@ import {claimQueuedOpsmapSchedule,mountOpsmapScheduledRun,opsmapScheduleConfig,O
   from '../src/opsmapScheduledRun.js';
 import {STAGE_ORIGIN,STAGE_SERVICE} from '../src/stageScope.js';
 import {createStageVerificationApp} from '../src/stageVerificationEntry.js';
-import {createStageFixedMasterExcelSource,projectFixedMasterExcel} from '../src/stageFixedMasterExcel.js';
+import {createStageFixedMasterExcelSource,projectFixedMasterExcel,readFixedMasterExcel} from '../src/stageFixedMasterExcel.js';
 
 const sha=(text,length=64)=>createHash(length===64?'sha256':'sha1').update(text).digest('hex');
 const codes=['S10001','S10002','S10003'], centers=['011','012','013'], head='fixed-master-daily-v1/head.json';
@@ -159,13 +160,13 @@ test('a confirmed inactive refresh exclusion retains the fixed master and omits 
   assert.deepEqual((await daily.readObservation(receipt(tick).date,codes)).data.map(row=>row.customerCode),codes.slice(1));
 });
 
-test('Excel verifies each center around a sequential download and stops on source drift',async()=>{
-  async function collect(drift){
-    const requests=[], selected=new Set(codes);
+test('Excel retries a drifting center once and never re-reads the already verified centers',async()=>{
+  async function collect(mode){
+    const requests=[], retries=[], selected=new Set(codes);
     let loginCount=0;
     const fieldNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(day=>'carSeq'+day+'Nm');
     const source=createStageFixedMasterExcelSource({env:{...env,FRESHON_ID:'fixture',FRESHON_PASSWORD:'fixture'},
-      login:async()=>{loginCount++;return {cookie:'fixture-session'};},now:()=>start,
+      login:async()=>{loginCount++;return {cookie:'fixture-session'};},now:()=>start,onRetry:detail=>retries.push(detail),
       fetchImpl:async(url,request)=>{
         const center=request.body.get('logCd'),excel=request.body.get('excelExcute')==='true';
         const index=centers.indexOf(center);
@@ -178,7 +179,7 @@ test('Excel verifies each center around a sequential download and stops on sourc
         assert.equal(request.body.get('baecha'),'2');
         if(excel)return new Response(String(index));
         return Response.json({status:200,data:[{estCd:codes[index],logCd:center,mainCarSeqNm:'101',
-          totalCnt:drift&&requests.length===3?2:1,...Object.fromEntries(fieldNames.map(field=>[field,'101']))}]});
+          totalCnt:center==='012'&&((mode!=='normal'&&requests.length===6)||(mode==='always'&&requests.length===9))?2:1,...Object.fromEntries(fieldNames.map(field=>[field,'101']))}]});
       },parseExcel:async(stream,{declaredRows,codes:requested})=>{
         assert.equal(requested,selected);
         assert.equal(declaredRows,1);
@@ -187,19 +188,93 @@ test('Excel verifies each center around a sequential download and stops on sourc
         const code=codes[Number(raw)],row=[code,...Array(8).fill('101')];
         return {sha256:sha(code),codes:[code],selected:[row],first:row};
       }});
-    if(drift){
-      await assert.rejects(()=>source(selected,base()),/FIXED_MASTER_EXCEL_CENTER_DRIFT/);
-      assert.deepEqual(requests,[['011',false],['011',true],['011',false]]);
+    const triplet=center=>[[center,false],[center,true],[center,false]];
+    if(mode==='always'){
+      await assert.rejects(()=>source(selected,base()),error=>error.code==='FIXED_MASTER_EXCEL_CENTER_DRIFT'&&
+        error.fixedDiagnostic.center==='012'&&error.fixedDiagnostic.field==='totalCnt');
+      assert.deepEqual(requests,[...triplet('011'),...triplet('012'),...triplet('012')]);
     }else{
       const value=await source(selected,base());
       assert.equal(value.meta.sourceRows,3);
       assert.equal(value.data.length,3);
-      assert.deepEqual(requests,centers.flatMap(center=>[[center,false],[center,true],[center,false]]));
+      assert.equal(value.locations.get(codes[1]).row,2);
+      assert.deepEqual(requests,(mode==='normal'?centers:['011','012','012','013']).flatMap(triplet));
     }
+    assert.equal(retries.length,mode==='normal'?0:1);
+    if(retries.length)assert.equal(retries[0].center,'012');
     assert.equal(loginCount,1);
   }
-  await collect(false);
-  await collect(true);
+  await collect('normal');
+  await collect('once');
+  await collect('always');
+});
+
+test('Excel helper exposes the exact worksheet field and row without raw values',async()=>{
+  const values=[['고객','', '주 호차정보',...'월화수목금토일'],
+    ['S10002','',...Array(8).fill('101')],['S10001','',...Array(8).fill('102')]];
+  const bytes=missing=>{
+    const sheet=XLSX.utils.aoa_to_sheet(values);
+    if(missing)delete sheet.D3;
+    const book=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book,sheet,'Sheet0');
+    return XLSX.write(book,{type:'buffer',bookType:'xlsx',bookSST:true});
+  };
+  const opts={declaredRows:2,codes:new Set(['S10001','S10002'])};
+  const parsed=await readFixedMasterExcel(Readable.from([bytes(false)]),opts);
+  assert.deepEqual(parsed.codes,['S10002','S10001']);
+  await assert.rejects(()=>readFixedMasterExcel(Readable.from([bytes(true)]),opts),error=>{
+    assert.equal(error.code,'FIXED_MASTER_EXCEL_FIELD');
+    assert.deepEqual(error.fixedDiagnostic,{row:3,field:'carSeqMonNm',reason:'MISSING_CELL'});
+    return true;
+  });
+});
+
+test('a store validation error identifies the offending workbook row and preserves all prior tuples',async()=>{
+  const store=memory(), baseline=base();
+  let tick=start;
+  const publish=readMaster=>syncStageFixedMaster({store,receipt:receipt(tick),now:()=>tick,scope,loadBaseline:reader(baseline).load,readMaster});
+  const previous=await publish(async()=>source('120'));
+  tick+=24*hour;
+  const priorObject=structuredClone(store.files.get('fixed-master-daily-v1/projection-'+previous.version+'.json').value);
+  let reads=0;
+  await assert.rejects(()=>publish(async()=>{
+    reads++;
+    const result=source('120');
+    result.data[0].baseVehicle='1e+21';
+    return {...result,locations:new Map([[codes[0],{center:'011',row:9999}]])};
+  }),error=>{
+    assert.equal(error.code,'FIXED_STORE_INVALID');
+    assert.equal(error.fixedDiagnostic.phase,'SOURCE_PROJECTION');
+    assert.equal(error.fixedDiagnostic.center,'011');
+    assert.equal(error.fixedDiagnostic.row,9999);
+    assert.equal(error.fixedDiagnostic.field,'mainCarSeqNm');
+    assert.equal(error.fixedDiagnostic.reason,'INVALID_FORMAT');
+    return true;
+  });
+  assert.equal(reads,1);
+  assert.equal(store.files.get(head).value.current.version,previous.version);
+  assert.deepEqual(store.files.get('fixed-master-daily-v1/projection-'+previous.version+'.json').value,priorObject);
+});
+
+test('fixed storage retries only transient reads once and distinguishes corrupt stored content',async()=>{
+  let reads=0, mode='metadata';
+  const retries=[];
+  const writer=stageFixedMasterStorage({env,write:true,retryReads:true,onReadRetry:detail=>retries.push(detail),
+    async fetchImpl(url,options){
+      assert.equal(options.method??'GET','GET');
+      if(!url.includes('/contents/'))return Response.json({private:true});
+      reads++;
+      if(mode==='metadata'&&reads===1)return new Response('invalid first metadata');
+      const content=mode==='bad-data'?'invalid stored content':JSON.stringify({schema:1});
+      return Response.json({sha:sha('fixture',40),content:Buffer.from(content).toString('base64')});
+    }});
+  assert.deepEqual((await writer.read(head)).value,{schema:1});
+  assert.deepEqual(retries,[{code:'FIXED_STORE_INVALID',reason:'CONTENTS_METADATA_JSON'}]);
+  assert.equal(reads,2);
+  mode='bad-data';
+  await assert.rejects(()=>writer.read(head),error=>error.code==='FIXED_STORE_INVALID'&&
+    error.fixedDiagnostic.reason==='STORED_JSON_INVALID'&&!error.fixedDiagnostic.retryable);
+  assert.equal(reads,3);
 });
 
 test('independent collection can restart an 82-page center once after late count drift',async()=>{

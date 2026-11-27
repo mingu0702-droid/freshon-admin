@@ -268,3 +268,48 @@ test('new registrations need a verified night order and later refreshes preserve
   await assert.rejects(run('d'),{code:'NATIONAL_REGISTRY_DUPLICATE_CUSTOMER'});
   assert.equal(head.current.version,subsequent.version);
 });
+test('a registry page validates fragmented JSON through the end of the response',async()=>{
+  const sourceRow={estCd:'S10101',estName:'검증 매장',address:'경기 합성시 합성로 20',logCd:'011',useYn:'Y',
+    totalCnt:'1',unused:{text:'{ [ ] , } " escaped '+String.fromCharCode(92)+' 한글'}};
+  const valid='{"metadata":{"list":[1,"\\uD55C",{"nested":[]}]}, "data":'+JSON.stringify([sourceRow])+' ,"status":200}';
+  let payload=valid;
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
+    FRESHON_COOKIE:'isolated-fixture-only',OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON:JSON.stringify({method:'POST',mode:'PAGED',
+      rowsKey:'data',totalField:'totalCnt',totalLocation:'FIRST_ROW',centerField:'logCd',activeField:'useYn',addressField:'address'})};
+  const membership=new Map([[sourceRow.estCd,{center:'osan',addressHash:customerRegistryAddressHash(sourceRow.address)}]]);
+  const read=createStageNationalRegistrationSource({env,membership,fetchImpl:async()=>{
+    const input=Buffer.from(payload);
+    let offset=0;
+    return new Response(new ReadableStream({pull(controller){
+      if(offset===input.length)controller.close();
+      else controller.enqueue(input.subarray(offset,++offset));
+    }}));
+  }});
+  assert.deepEqual((await read('osan')).rows.map(row=>row.customerCode),[sourceRow.estCd]);
+  for(const invalid of [valid.slice(0,-1),valid+' null',valid.slice(0,-1)+',"data":[]}',valid.slice(0,-1)+',}']){
+    payload=invalid;
+    await assert.rejects(read('osan'),{code:'NATIONAL_REGISTRY_SOURCE_CONTRACT'});
+  }
+  payload=JSON.stringify([sourceRow]);
+  const contract=JSON.parse(env.OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON);
+  const unwrapped=createStageNationalRegistrationSource({env:{...env,OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON:
+    JSON.stringify({...contract,rowsKey:null,totalField:'length',totalLocation:'BODY'})},membership,
+    fetchImpl:async()=>new Response(payload)});
+  assert.equal((await unwrapped('osan')).rows.length,1);
+});
+
+test('duplicate detection remembers a code that can qualify by order in a later center',async()=>{
+  const code='S72101';
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,OPSMAP_STAGE_NATIONAL_REGISTRY_APPROVED:'1',
+    FRESHON_COOKIE:'isolated-fixture-only',OPSMAP_STAGE_NATIONAL_REGISTRY_CONTRACT_JSON:JSON.stringify({method:'POST',mode:'PAGED',
+      rowsKey:'data',totalField:'totalCnt',totalLocation:'BODY',centerField:'logCd',activeField:'useYn',addressField:'address'})};
+  const read=createStageNationalRegistrationSource({env,membership:new Map(),excludedCustomers:new Set(),
+    orderCustomersByCenter:new Map([['yeongnam',new Set([code])]]),skipRefresh:new Set(),
+    fetchImpl:async(_url,options)=>{
+      const logCd=new URLSearchParams(options.body).get('logCd');
+      return Response.json({totalCnt:1,data:[{estCd:code,estName:'검증 매장',address:'경기 합성시 합성로 20',
+        logCd,useYn:'Y',baecha:'2',baechaName:'야간배송'}]});
+    }});
+  assert.deepEqual((await read('osan')).rows,[]);
+  await assert.rejects(read('yeongnam'),{code:'NATIONAL_REGISTRY_DUPLICATE_CUSTOMER'});
+});

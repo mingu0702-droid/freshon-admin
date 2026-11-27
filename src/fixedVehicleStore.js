@@ -5,21 +5,40 @@ import {canonicalFixedMasterVehicle, isProjectedFixedMasterVehicle} from './fixe
 import {isStoredFixedWeekdayValue} from '../public/opsmap/fixed-delivery-weekdays.mjs';
 export const FIXED_SCHEMA = 1;
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const fail = code => { throw Object.assign(new Error(code), {code}); };
+const fail = (code, fixedDiagnostic) => {
+  throw Object.assign(new Error(code), {code, ...(fixedDiagnostic ? {fixedDiagnostic} : {})});
+};
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
+const groups = ['','osan','yeongnam','honam'];
+const states = ['VERIFIED_MASTER','UNASSIGNED','CONFLICT'];
+const invalid = (field, reason, rowIndex, group) => fail('FIXED_STORE_INVALID', {
+  field, reason, ...(rowIndex === undefined ? {} : {rowIndex}),
+  ...(groups.includes(group) && group ? {group} : {})
+});
 export function fixedEnvelope(data, checkedAt) {
-  if (!Array.isArray(data) || !data.length || !Number.isFinite(Date.parse(checkedAt)) || Date.parse(checkedAt)>Date.now()+300000) fail('FIXED_STORE_INVALID');
+  if (!Array.isArray(data) || !data.length) invalid('rows','EMPTY_OR_INVALID');
+  if (!Number.isFinite(Date.parse(checkedAt)) || Date.parse(checkedAt)>Date.now()+300000) invalid('checkedAt','INVALID_TIME');
   const seen = new Set();
-  const rows = data.map(row => {
+  const rows = data.map((row, index) => {
     const code = row.customerCode;
     const vehicle = String(row.baseVehicle || '');
     const group = String(row.baseVehicleGroup || '');
     const state = row.baseVehicleState;
-    if (!isFixedMasterCustomerKey(code) || seen.has(code) || !isProjectedFixedMasterVehicle(vehicle) || !['','osan','yeongnam','honam'].includes(group)
-      || !['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(state) || (state==='VERIFIED_MASTER') !== !!vehicle
-      || row.baseVehicleEmptyVerified!==undefined && (row.baseVehicleEmptyVerified!==true || state!=='UNASSIGNED')) fail('FIXED_STORE_INVALID');
+    if (!isFixedMasterCustomerKey(code)) invalid('customerCode','INVALID_FORMAT',index,group);
+    if (seen.has(code)) invalid('customerCode','DUPLICATE',index,group);
+    if (!isProjectedFixedMasterVehicle(vehicle)) invalid('baseVehicle','INVALID_FORMAT',index,group);
+    if (!groups.includes(group)) invalid('baseVehicleGroup','UNKNOWN_CENTER',index);
+    if (!states.includes(state)) invalid('baseVehicleState','INVALID_STATE',index,group);
+    if ((state==='VERIFIED_MASTER') !== !!vehicle) invalid('baseVehicle','STATE_MISMATCH',index,group);
+    if (row.baseVehicleEmptyVerified!==undefined && (row.baseVehicleEmptyVerified!==true || state!=='UNASSIGNED')) {
+      invalid('baseVehicleEmptyVerified','STATE_MISMATCH',index,group);
+    }
     seen.add(code);
-    const days = row.weekdays ? DAYS.map(day => {const v=String(row.weekdays[day]||'');if(!isStoredFixedWeekdayValue(v))fail('FIXED_STORE_INVALID');return v;}) : null;
+    const days = row.weekdays ? DAYS.map(day => {
+      const v=String(row.weekdays[day]||'');
+      if(!isStoredFixedWeekdayValue(v)) invalid('weekdays.'+day,'INVALID_FORMAT',index,group);
+      return v;
+    }) : null;
     const tuple=[code, vehicle, group, state, days];
     if(row.baseVehicleEmptyVerified)tuple.push(true);
     return tuple;
@@ -31,13 +50,24 @@ export function fixedTupleData(r){return {customerCode:r[0],baseVehicle:canonica
   ...(r[5]===true?{baseVehicleEmptyVerified:true}:{}),
   ...(r[4]?{weekdays:Object.fromEntries(DAYS.map((d,i)=>[d,r[4][i]]))}:{}),baseVehicleSource:'FIXED_DISPATCH_PRIMARY'};}
 export function validateFixedEnvelope(value,{materialize=true}={}) {
-  if(value?.schema!==FIXED_SCHEMA || !Array.isArray(value.rows) || value.rows.some(r=>!Array.isArray(r)||
-    r.length!==5&&!(r.length===6&&r[5]===true&&r[3]==='UNASSIGNED')||r[4]!==null&&(!Array.isArray(r[4])||r[4].length!==7)))fail('FIXED_STORE_INVALID');
-  if(!value.rows.length||!Number.isFinite(Date.parse(value.checkedAt))||new Date(value.checkedAt).toISOString()!==value.checkedAt||Date.parse(value.checkedAt)>Date.now()+300000)fail('FIXED_STORE_INVALID');
+  if(value?.schema!==FIXED_SCHEMA || !Array.isArray(value.rows) || !value.rows.length) invalid('rows','INVALID_ENVELOPE');
+  if(!Number.isFinite(Date.parse(value.checkedAt)) || new Date(value.checkedAt).toISOString()!==value.checkedAt ||
+      Date.parse(value.checkedAt)>Date.now()+300000) invalid('checkedAt','INVALID_TIME');
   let previous='';
-  for(const r of value.rows){
-    if(!isFixedMasterCustomerKey(r[0])||r[0]<=previous||!isProjectedFixedMasterVehicle(r[1])||!['','osan','yeongnam','honam'].includes(r[2])||!['VERIFIED_MASTER','UNASSIGNED','CONFLICT'].includes(r[3])||(r[3]==='VERIFIED_MASTER')!==!!r[1]||r[4]?.some(v=>!isStoredFixedWeekdayValue(v)))fail('FIXED_STORE_INVALID');
-    previous=r[0];
+  for(const [index,r] of value.rows.entries()){
+    if(!Array.isArray(r) || r.length!==5 && !(r.length===6 && r[5]===true && r[3]==='UNASSIGNED')) invalid('row','INVALID_TUPLE',index);
+    const [code,vehicle,group,state,days]=r;
+    if(days!==null && (!Array.isArray(days) || days.length!==7)) invalid('weekdays','INVALID_TUPLE',index,group);
+    if(!isFixedMasterCustomerKey(code)) invalid('customerCode','INVALID_FORMAT',index,group);
+    if(code<=previous) invalid('customerCode',code===previous?'DUPLICATE':'UNSORTED',index,group);
+    if(!isProjectedFixedMasterVehicle(vehicle)) invalid('baseVehicle','INVALID_FORMAT',index,group);
+    if(!groups.includes(group)) invalid('baseVehicleGroup','UNKNOWN_CENTER',index);
+    if(!states.includes(state)) invalid('baseVehicleState','INVALID_STATE',index,group);
+    if((state==='VERIFIED_MASTER')!==!!vehicle) invalid('baseVehicle','STATE_MISMATCH',index,group);
+    for(let day=0;days && day<DAYS.length;day++){
+      if(!isStoredFixedWeekdayValue(days[day])) invalid('weekdays.'+DAYS[day],'INVALID_FORMAT',index,group);
+    }
+    previous=code;
   }
   // Validate the same canonical bytes without materializing 88k customer
   // objects and a second tuple tree on every load/save/read-back.
@@ -48,7 +78,7 @@ export function validateFixedEnvelope(value,{materialize=true}={}) {
 
 // Reuses existing GITHUB_* credentials. Explicitly refuses public repositories.
 // Contents API SHA CAS gives atomic replace/lease across overlapping processes.
-export function createPrivateGithubJsonStore({env=process.env,fetchImpl=fetch,now=Date.now}={}) {
+export function createPrivateGithubJsonStore({env=process.env,fetchImpl=fetch,now=Date.now,diagnoseReads=false}={}) {
   const repo=env.GITHUB_CACHE_REPO,token=env.GITHUB_TOKEN,branch=env.GITHUB_CACHE_BRANCH||'main';
   const prefix=(env.GITHUB_CACHE_DIR||'freshon-cache').replace(/^\/+|\/+$/g,'');
   const root=`https://api.github.com/repos/${repo}`;
@@ -65,20 +95,34 @@ export function createPrivateGithubJsonStore({env=process.env,fetchImpl=fetch,no
     const d=await r.json();if(d.private!==true)fail('FIXED_STORE_NOT_PRIVATE');privateCheckedAt=now();
   }
   const url=name=>`${root}/contents/${prefix}/${name}`;
+  const transientReadStatus=new Set([408,429,500,502,503,504]);
+  const readFail=(code,reason,{status,retryable=false}={})=>fail(code,diagnoseReads?
+    {reason,...(status===undefined?{}:{status}),retryable}:undefined);
   async function read(name){
-    await guard();const r=await request(url(name)+'?ref='+encodeURIComponent(branch));
-    if(r.status===404)return {sha:null,value:null};if(!r.ok)fail('FIXED_STORE_READ');
-    const meta=await r.json();let value;
+    await guard();
+    const r=await request(url(name)+'?ref='+encodeURIComponent(branch));
+    if(r.status===404)return {sha:null,value:null};
+    if(!r.ok)readFail('FIXED_STORE_READ','CONTENTS_HTTP',{status:r.status,retryable:transientReadStatus.has(r.status)});
+    let meta;
+    try{meta=await r.json();}
+    catch(error){
+      if(!diagnoseReads)throw error;
+      readFail('FIXED_STORE_INVALID','CONTENTS_METADATA_JSON',{retryable:true});
+    }
     try{
-      if(meta.content)value=JSON.parse(Buffer.from(meta.content,'base64').toString('utf8'));
-      else {
-        // >1MB Contents responses omit content. Fetch exact blob SHA, not a mutable raw URL.
-        if(!/^[a-f0-9]{40}$/.test(meta.sha||''))fail('FIXED_STORE_INVALID');
-        const blob=await request(`${root}/git/blobs/${meta.sha}`);if(!blob.ok)fail('FIXED_STORE_READ');
-        const body=await blob.json();value=JSON.parse(Buffer.from(body.content,'base64').toString('utf8'));
-      }
-    }catch{fail('FIXED_STORE_INVALID');}
-    return {sha:meta.sha,value};
+      if(meta.content)return {sha:meta.sha,value:JSON.parse(Buffer.from(meta.content,'base64').toString('utf8'))};
+      // >1MB Contents responses omit content. Fetch exact blob SHA, not a mutable raw URL.
+      if(!/^[a-f0-9]{40}$/.test(meta.sha||''))readFail('FIXED_STORE_INVALID','CONTENTS_METADATA_SHA',{retryable:true});
+      const blob=await request(`${root}/git/blobs/${meta.sha}`);
+      if(!blob.ok)readFail('FIXED_STORE_READ','BLOB_HTTP',{status:blob.status,retryable:transientReadStatus.has(blob.status)});
+      let body;
+      try{body=await blob.json();}
+      catch{readFail('FIXED_STORE_INVALID','BLOB_METADATA_JSON',{retryable:true});}
+      return {sha:meta.sha,value:JSON.parse(Buffer.from(body.content,'base64').toString('utf8'))};
+    }catch(error){
+      if(diagnoseReads&&(error?.fixedDiagnostic||error?.code==='FIXED_STORE_NETWORK'))throw error;
+      readFail('FIXED_STORE_INVALID','STORED_JSON_INVALID');
+    }
   }
   async function readRaw(name,maxBytes){
     await guard();
