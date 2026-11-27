@@ -377,6 +377,36 @@ test('streamed orders validate fragmented UTF-8, row/scope counts, and the compl
   assert.equal(cancelCount,0);
 });
 
+test('large Osan order exports stream within a bounded byte limit',async()=>{
+  const date='2026-11-26', onlyOsan=new Set(['yeongnam','honam']), diagnostics=[];
+  const env={RENDER_EXTERNAL_URL:STAGE_ORIGIN,RENDER_SERVICE_ID:STAGE_SERVICE,
+    OPSMAP_STAGE_RECENT_OPERATIONS_ORDERS_APPROVED:'1',FRESHON_COOKIE:'fixture'};
+  const count=16_474;
+  const row={stockDate:date,logCdName:'오산물류센터',logCd:'011',dcOutDate:'확정',
+    baechaName:'야간배송',estCd:'S1',dlvyEstCd:'S1',orderNo:'O1',orderQty:2,totalCnt:count,
+    extra:'a'.repeat(3_100)};
+  let emitted=0, tooLarge=false;
+  const read=createStageRecentOrdersReader({env,onDiagnostic:value=>diagnostics.push(value),fetchImpl:async()=>{
+    let seq=0;
+    const headers={'content-type':'application/json'};
+    if(tooLarge)headers['content-length']=String(64*1024*1024+1);
+    return new Response(new ReadableStream({pull(controller){
+      if(seq>count){controller.close();return;}
+      const text=seq===0?'{"data":[':JSON.stringify({...row,seq})+(seq===count?']}':',');
+      const bytes=Buffer.from(text);
+      emitted+=bytes.length;
+      controller.enqueue(bytes);
+      seq++;
+    }}),{headers});
+  }});
+  assert.deepEqual(await read(date,onlyOsan),[makeNightOrderDay(date,'osan',['S1'])]);
+  assert.ok(emitted>48*1024*1024);
+  assert.ok(emitted<64*1024*1024);
+  tooLarge=true;
+  assert.deepEqual(await read(date,onlyOsan),[]);
+  assert.equal(diagnostics.filter(d=>d.centerKey==='osan').at(-1).state,'READ_FAILED');
+});
+
 test('a newly sourced day is saved and verified before advancing the operating ledger',async()=>{
   const date='2026-11-18', before=ledger(makeDay(initialEnd,'freshon_orders','partial',['S1']));
   const incoming=makeDay(date,'freshon_orders','partial',['S2']);

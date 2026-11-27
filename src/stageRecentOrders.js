@@ -129,7 +129,9 @@ function orderEnvelope(acceptRow) {
 }
 
 async function readOrderEvidence(response,date,centerKey,signal) {
-  const limit=48*1024*1024;
+  // The verified Osan night-order export can exceed 48 MiB. The parser
+  // still reads fixed-size blocks and keeps the existing row limit.
+  const limit=(centerKey==='osan'?64:48)*1024*1024;
   const length=response.headers.get('content-length');
   const type=(response.headers.get('content-type')||'').split(';')[0].trim();
   const cancel=reader=>{try {void reader?.cancel()?.catch(()=>{});}catch {}};
